@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"strconv"
 )
 
 // Document : Object for each page with an array for each asset
@@ -23,6 +24,10 @@ type Document struct {
 	Stylesheets []string
 	Scripts     []string
 	Images      []string
+}
+
+func delaySecond(delay time.Duration) {
+	time.Sleep(delay * time.Second)
 }
 
 func downloadRobots(newURL string) {
@@ -59,6 +64,7 @@ func checkRobots(newURL string) bool {
 	// This function checks for politeness regarding user agents, allow/deny and crawler rate
 	var allowedScan = true
 	var userAgent = false
+	var delay = time.Duration(1)
 
 	u, err := url.Parse(newURL)
 	if err != nil {
@@ -86,14 +92,19 @@ func checkRobots(newURL string) bool {
 			userAgent = true
 		}
 
+		if strings.HasPrefix(scanner.Text(), "Crawl-delay:") {
+			var stringDelay = strings.TrimPrefix(scanner.Text(), "Crawl-delay: ")
+			number, _ := strconv.Atoi(stringDelay)
+			delay = time.Duration(number)
+		}
+
 	}
 
 	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
 	}
 
-	duration := time.Second
-	time.Sleep(duration)
+	delaySecond(delay)
 
 	if allowedScan && userAgent {
 		return true
