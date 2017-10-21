@@ -291,9 +291,7 @@ func processCrawler(documentMap map[string]Document, channelDocument chan Docume
 }
 
 func main() {
-	var passedURL string
-	fmt.Print("Enter site to crawl: ")
-	fmt.Scanln(&passedURL)
+	var passedURL  = os.Getenv("WEBSITE")
 
 	u, err := url.ParseRequestURI(passedURL)
 	if err != nil {
