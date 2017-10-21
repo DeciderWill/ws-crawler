@@ -92,6 +92,9 @@ func checkRobots(newURL string) bool {
 		log.Fatal(err)
 	}
 
+	duration := time.Second
+	time.Sleep(duration)
+
 	if allowedScan && userAgent {
 		return true
 	}
@@ -257,6 +260,7 @@ func processCrawler(documentMap map[string]Document, channelDocument chan Docume
 	if len(queue) == 0 {
 		return documentMap
 	}
+
 	for k, v := range queue {
 		_ = k
 		var allowed = checkRobots(v)
