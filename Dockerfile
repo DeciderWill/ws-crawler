@@ -1,3 +1,8 @@
-FROM golang:onbuild
-ARG WEBSITE=http://golang.com
-EXPOSE 8080
+FROM golang:1.6
+
+WORKDIR /go/src/app
+COPY . .
+
+RUN go install -v
+
+CMD ["app"]
