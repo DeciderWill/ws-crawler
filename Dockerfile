@@ -1,6 +1,7 @@
 FROM golang:1.9.1-alpine3.6
 
-RUN apt-get install -y git
+RUN apk update && apk upgrade && \
+    apk add --no-cache bash git
 
 WORKDIR /go/src/app
 COPY . .
