@@ -4,17 +4,19 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
-	"io"
-	"log"
 	"os"
 	"strings"
 	"time"
-	"io/ioutil"
+
 	"github.com/PuerkitoBio/goquery"
 )
 
+// Document : Object for each page with an array for each asset
 type Document struct {
 	Location    string
 	Urls        []string
@@ -30,11 +32,11 @@ func downloadRobots(newURL string) {
 	}
 
 	var needRefresh = false
-	var constructUrl = u.Scheme + "://" + u.Host + "/robots.txt"
+	var constructURL = u.Scheme + "://" + u.Host + "/robots.txt"
 
 	// check whether the robots.txt has already been downloaded, if not download it
 	if _, err := os.Stat(u.Host); os.IsNotExist(err) {
-		downloadAndCreateRobots(u, constructUrl)
+		downloadAndCreateRobots(u, constructURL)
 	}
 
 	// fetch the info regarding robot.txt ie modified time
@@ -49,7 +51,7 @@ func downloadRobots(newURL string) {
 	}
 
 	if needRefresh {
-		downloadAndCreateRobots(u, constructUrl)
+		downloadAndCreateRobots(u, constructURL)
 	}
 }
 
@@ -92,20 +94,23 @@ func checkRobots(newURL string) bool {
 
 	if allowedScan && userAgent {
 		return true
-	} else {
-		return false
 	}
+	return false
 
 }
 
-func downloadAndCreateRobots(u *url.URL, constructUrl string) {
+func downloadAndCreateRobots(u *url.URL, constructURL string) {
 	output, err := os.Create(u.Host)
 	if err != nil {
 		fmt.Println("Error while creating", u.Host, "-", err)
 	}
 	defer output.Close()
 
-	response, err := http.Get(constructUrl)
+	response, err := http.Get(constructURL)
+
+	if err != nil {
+		panic(err)
+	}
 
 	defer response.Body.Close()
 
@@ -117,7 +122,7 @@ func downloadAndCreateRobots(u *url.URL, constructUrl string) {
 	_ = n
 }
 
-func downloadAndCreateJsonMap(newURL string, jsonData []byte) string {
+func downloadAndCreateJSONMap(newURL string, jsonData []byte) string {
 	u, err := url.Parse(newURL)
 	if err != nil {
 		panic(err)
@@ -160,15 +165,14 @@ func normalise(newURL string) string {
 
 	if !strings.HasSuffix(lowercaseURL, "/") {
 		return newURL + "/"
-	} else {
-		return lowercaseURL
 	}
+	return lowercaseURL
 
 }
 
-func fetchUrl(baseUrl string, c chan Document) {
+func fetchURL(baseURL string, c chan Document) {
 	//normalise url
-	var Location = normalise(baseUrl)
+	var Location = normalise(baseURL)
 
 	doc, err := goquery.NewDocument(Location)
 	if err != nil {
@@ -202,9 +206,8 @@ func fetchUrl(baseUrl string, c chan Document) {
 		// only return link if host of the base url and context url are the same
 		if baseParse.Host == contextParse.Host {
 			return contextParse.String()
-		} else {
-			return ""
 		}
+		return ""
 
 	})
 
@@ -214,9 +217,9 @@ func fetchUrl(baseUrl string, c chan Document) {
 
 		if strings.HasPrefix(val, "//") {
 			return strings.Replace(val, "//", "http://", -1)
-		} else {
-			return val
 		}
+		return val
+
 	})
 
 	// Find all the script tags and get the src attribute value and remove // if present and replace with http
@@ -224,10 +227,9 @@ func fetchUrl(baseUrl string, c chan Document) {
 		val, _ := s.Attr("src")
 		if strings.HasPrefix(val, "//") {
 			return strings.Replace(val, "//", "http://", -1)
-		} else {
-			return val
 		}
 
+		return val
 	})
 
 	// Find all the link tags and get the href attribute value but only if the rel equals stylesheet
@@ -260,7 +262,7 @@ func processCrawler(documentMap map[string]Document, channelDocument chan Docume
 		var allowed = checkRobots(v)
 
 		if allowed {
-			go fetchUrl(v, channelDocument)
+			go fetchURL(v, channelDocument)
 
 			var details = <-channelDocument
 			documentMap[details.Location] = details
@@ -282,10 +284,8 @@ func processCrawler(documentMap map[string]Document, channelDocument chan Docume
 			log.Println("Documents length:", len(documentMap))
 
 			return processCrawler(documentMap, channelDocument, queue, markedPages)
-
-		} else {
-			fmt.Print("Not allowed")
 		}
+		fmt.Print("Not allowed")
 	}
 	return documentMap
 }
@@ -305,14 +305,14 @@ func main() {
 	channelDocument := make(chan Document) // channel for document
 	var newURL = normalise(passedURL)
 	downloadRobots(newURL)
-	var markedPages = make(map[string]bool) // URLs already in the system whether processed or in queue.
-	var queue []string // URLs to be fetched, using a very simple array FIFO
+	var markedPages = make(map[string]bool)     // URLs already in the system whether processed or in queue.
+	var queue []string                          // URLs to be fetched, using a very simple array FIFO
 	var documentMap = make(map[string]Document) // map of all the processed pages
 	markedPages[newURL] = true
 	queue = append(queue, newURL)
 	var results = processCrawler(documentMap, channelDocument, queue, markedPages)
 	b, err := json.MarshalIndent(results, "", "  ")
-	var fileName = downloadAndCreateJsonMap(newURL, b)
+	var fileName = downloadAndCreateJSONMap(newURL, b)
 	if err != nil {
 		fmt.Println(err)
 		return
