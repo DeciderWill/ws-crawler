@@ -1,5 +1,7 @@
 FROM golang:1.9.1-alpine3.6
 
+RUN apt-get install -y git
+
 WORKDIR /go/src/app
 COPY . .
 
