@@ -1,7 +1,6 @@
 package main
 
 import (
-    "bufio"
     "encoding/json"
     "fmt"
     "io"
@@ -14,6 +13,14 @@ import (
     "time"
     "github.com/PuerkitoBio/goquery"
     "strconv"
+	"flag"
+)
+
+import (
+	"runtime/pprof"
+	"runtime"
+	"bytes"
+	"math"
 )
 
 // Document : Object for each page with an array for each asset
@@ -25,11 +32,13 @@ type Document struct {
     Images      []string
 }
 
-func delaySecond(delay time.Duration) {
-    time.Sleep(delay * time.Second)
+func delaySecond(delay float64) {
+	fmt.Println("Delaying for:", time.Duration(math.Abs(delay) * 1000)* time.Millisecond)
+    time.Sleep(time.Duration(math.Abs(delay) * 1000) * time.Millisecond)
 }
 
-func downloadRobots(newURL string) {
+func initialiseRobots(newURL string) {
+	defer timeTrack(time.Now(), "Initialise Robots")
     u, err := url.Parse(newURL)
     if err != nil {
         panic(err)
@@ -64,58 +73,81 @@ func timeTrack(start time.Time, name string) {
     log.Printf("%s took %s", name, elapsed)
 }
 
-func checkRobots(newURL string) bool {
+func checkRobots(newURL string, disallowedPages []string) bool {
     // This function checks for politeness regarding user agents, allow/deny and crawler rate
-    defer timeTrack(time.Now(), "Robots checking")
-    var allowedScan = true
-    var userAgent = false
-    var delay = time.Duration(1)
+	URL, err := url.Parse(newURL)
 
-    u, err := url.Parse(newURL)
-    if err != nil {
-        panic(err)
-    }
+	if err != nil {
+		fmt.Print(err)
+	}
 
-    file, err := os.Open(u.Host)
-    if err != nil {
-        log.Panic(err)
-    }
-    defer file.Close()
+	for _, disallowPath := range disallowedPages {
+		if disallowPath == URL.Path {
+			return false
+		}
+	}
+	return true
 
-    scanner := bufio.NewScanner(file)
-    for scanner.Scan() {
+}
 
-        if scanner.Text() == "Allow: "+u.Path {
-            allowedScan = true
-        }
 
-        if scanner.Text() == "Disallow: "+u.Path {
-            allowedScan = false
-        }
+func processRobots(newURL string) (bool, []string, []string, int) {
+	defer timeTrack(time.Now(), "Process Robots")
+	userAgent := false
+	crawlDelay := 1
+	disallowedPages := []string{}
+	allowedPages := []string{}
+	var buff bytes.Buffer
 
-        if scanner.Text() == "User-agent: *" {
-            userAgent = true
-        }
+	URL, err := url.Parse(newURL)
+	if err != nil {
+		panic(err)
+	}
 
-        if strings.HasPrefix(scanner.Text(), "Crawl-delay:") {
-            var stringDelay = strings.TrimPrefix(scanner.Text(), "Crawl-delay: ")
-            number, _ := strconv.Atoi(stringDelay)
-            delay = time.Duration(number)
-        }
+	robotsTxt, err := ioutil.ReadFile(URL.Host)
+	if err != nil {
+		fmt.Print(err)
+	}
 
-    }
+	buff.WriteString(string(robotsTxt))
+	buff.WriteString("\n")
 
-    if err := scanner.Err(); err != nil {
-        log.Fatal(err)
-    }
+	fileAsString := buff.String()
 
-    delaySecond(delay)
+	robotLines := strings.Split(fileAsString, "\n")
 
-    if allowedScan && userAgent {
-        return true
-    }
-    return false
+	for _, lineValue := range robotLines {
 
+		if lineValue == "" {
+			continue
+		}
+
+		values := strings.Split(lineValue, ":")
+
+		field := strings.TrimSpace(values[0])
+		value := strings.TrimSpace(values[1])
+
+		switch strings.ToLower(field) {
+		case "user-agent":
+			if value == "*" {
+				userAgent = true
+			}
+			break
+		case "disallow":
+			disallowedPages = append(disallowedPages, value)
+			break
+		case "allow":
+			allowedPages = append(allowedPages, value)
+			break
+		case "crawl-delay":
+			crawlDelay, _ := strconv.Atoi(value)
+			_ = crawlDelay
+			break
+		default:
+			break
+		}
+	}
+	return userAgent, disallowedPages, allowedPages, crawlDelay
 }
 
 func downloadAndCreateRobots(u *url.URL, constructURL string) {
@@ -143,12 +175,13 @@ func downloadAndCreateRobots(u *url.URL, constructURL string) {
 }
 
 func addToJSONMap(newURL string, jsonData []byte) string {
-    u, err := url.Parse(newURL)
+	defer timeTrack(time.Now(), "Add JSON to file")
+    URL, err := url.Parse(newURL)
     if err != nil {
         panic(err)
     }
 
-    var fileName = u.Host + ".json"
+    var fileName = URL.Host + ".json"
 
     err = ioutil.WriteFile(fileName, jsonData, 0644)
     if err != nil {
@@ -181,7 +214,7 @@ func removeDuplicates(elements []string) []string {
 
 func normalise(newURL string) string {
 
-    var lowercaseURL = strings.ToLower(newURL)
+    lowercaseURL := strings.ToLower(newURL)
 
     if !strings.HasSuffix(lowercaseURL, "/") {
         return newURL + "/"
@@ -193,7 +226,7 @@ func normalise(newURL string) string {
 func fetchURL(baseURL string, c chan Document) {
     defer timeTrack(time.Now(), "Fetching URL")
     //normalise url
-    var Location = normalise(baseURL)
+    Location := normalise(baseURL)
 
     doc, err := goquery.NewDocument(Location)
     if err != nil {
@@ -274,69 +307,142 @@ func remove(slice []string, s int) []string {
     return append(slice[:s], slice[s+1:]...)
 }
 
-func processCrawler(documentMap map[string]Document, channelDocument chan Document, queue []string, markedPages map[string]bool) map[string]Document {
+func processCrawler(
+	documentMap []Document,
+	channelDocument chan Document,
+	queue []string,
+	markedPages map[string]bool,
+	disallowedPages []string,
+	allowedPages []string,
+	crawlDelay int,
+	timeCalled time.Time,
+	)[]Document {
+
     if len(queue) == 0 {
         return documentMap
     }
 
-    for k, v := range queue {
-        _ = k
-        var allowed = checkRobots(v)
+	currentTime := time.Now()
+    diff := timeCalled.Sub(currentTime)
+    transformedDiff := math.Abs(float64(diff.Seconds()))
+	if transformedDiff < float64(crawlDelay) {
+		delaySecond(float64(crawlDelay) + diff.Seconds())
+	} else {
+		log.Println("No delay needed")
+	}
+
+	timeCalled = time.Now()
+
+    for _, URL := range queue {
+        allowed := checkRobots(URL, disallowedPages)
 
         if allowed {
-            go fetchURL(v, channelDocument)
+            go fetchURL(URL, channelDocument)
+			queue = remove(queue, 0)
 
-            var details = <-channelDocument
-            documentMap[details.Location] = details
+            details := <-channelDocument
+			documentMap = append(documentMap, details)
 
-            for k, v := range details.Urls {
-                _ = k
-                //ensure value isn't empty
-                if !markedPages[v] && v != "" {
-                    markedPages[v] = true
-                    queue = append(queue, v)
+            for _, URL := range details.Urls {
+
+				// check the URL is actually a URL and if not continue to the next item in the array
+				_, err := url.ParseRequestURI(URL)
+				if err != nil {
+					continue
+				}
+
+				//ensure value isn't empty or already in the system
+                if !markedPages[URL] && URL != "" {
+                    markedPages[URL] = true
+                    queue = append(queue, URL)
                 } else {
 
                 }
             }
 
-            queue = remove(queue, 0)
-
             log.Println("Queue length:", len(queue))
             log.Println("Documents length:", len(documentMap))
 
-            return processCrawler(documentMap, channelDocument, queue, markedPages)
+            return processCrawler(documentMap,
+            	channelDocument,
+				queue,
+				markedPages,
+				disallowedPages,
+				allowedPages,
+				crawlDelay,
+				timeCalled,
+			)
         }
-        fmt.Print("Not allowed")
+        fmt.Print("This page is not allowed to be crawled")
+        continue
     }
     return documentMap
 }
 
+
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile `file`")
+var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+
+
 func main() {
-    var passedURL = os.Getenv("WEBSITE")
+	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
-    u, err := url.ParseRequestURI(passedURL)
-    if err != nil {
-        panic(err)
-    }
 
-    _ = u
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		runtime.GC() // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+		f.Close()
+	}
 
-    channelDocument := make(chan Document) // channel for document
-    var newURL = normalise(passedURL)
-    downloadRobots(newURL)
-    var markedPages = make(map[string]bool)     // URLs already in the system whether processed or in queue.
-    var queue []string                          // URLs to be fetched, using a very simple array FIFO
-    var documentMap = make(map[string]Document) // map of all the processed pages
-    markedPages[newURL] = true
-    queue = append(queue, newURL)
-    var results = processCrawler(documentMap, channelDocument, queue, markedPages)
-    b, err := json.MarshalIndent(results, "", "  ")
-    var fileName = addToJSONMap(newURL, b)
-    if err != nil {
-        fmt.Println(err)
-        return
-    }
-    fmt.Println("Sitemap: ", fileName)
+		passedURL := os.Getenv("WEBSITE")
 
-}
+		_, err := url.ParseRequestURI(passedURL)
+		if err != nil {
+			panic(err)
+		}
+
+		channelDocument := make(chan Document) // channel for document
+		newURL := normalise(passedURL)
+		initialiseRobots(newURL)
+		userAgent, disallowedPages, allowedPages, crawlDelay := processRobots(newURL)
+
+		if userAgent {
+			markedPages:= make(map[string]bool)     // URLs already in the system whether processed or in queue.
+			var queue []string                          // URLs to be fetched, using a very simple array FIFO
+			var documentMap []Document // map of all the processed pages
+			markedPages[newURL] = true
+			queue = append(queue, newURL)
+			timeCalled := time.Now()
+			results := processCrawler(documentMap, channelDocument, queue, markedPages, disallowedPages, allowedPages, crawlDelay, timeCalled)
+			b, err := json.MarshalIndent(results, "", "  ")
+			fileName := addToJSONMap(newURL, b)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			fmt.Println("Sitemap: ", fileName)
+
+		} else {
+			fmt.Println("You're not allowed to crawl this site")
+			return
+		}
+
+
+
+	}
