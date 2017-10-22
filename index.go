@@ -1,335 +1,342 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
-	"fmt"
-	"io"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"net/url"
-	"os"
-	"strings"
-	"time"
-
-	"github.com/PuerkitoBio/goquery"
-	"strconv"
+    "bufio"
+    "encoding/json"
+    "fmt"
+    "io"
+    "io/ioutil"
+    "log"
+    "net/http"
+    "net/url"
+    "os"
+    "strings"
+    "time"
+    "github.com/PuerkitoBio/goquery"
+    "strconv"
 )
 
 // Document : Object for each page with an array for each asset
 type Document struct {
-	Location    string
-	Urls        []string
-	Stylesheets []string
-	Scripts     []string
-	Images      []string
+    Location    string
+    Urls        []string
+    Stylesheets []string
+    Scripts     []string
+    Images      []string
 }
 
 func delaySecond(delay time.Duration) {
-	time.Sleep(delay * time.Second)
+    time.Sleep(delay * time.Second)
 }
 
 func downloadRobots(newURL string) {
-	u, err := url.Parse(newURL)
-	if err != nil {
-		panic(err)
-	}
+    u, err := url.Parse(newURL)
+    if err != nil {
+        panic(err)
+    }
 
-	var needRefresh = false
-	var constructURL = u.Scheme + "://" + u.Host + "/robots.txt"
+    var needRefresh = false
+    var constructURL = u.Scheme + "://" + u.Host + "/robots.txt"
 
-	// check whether the robots.txt has already been downloaded, if not download it
-	if _, err := os.Stat(u.Host); os.IsNotExist(err) {
-		downloadAndCreateRobots(u, constructURL)
-	}
+    // check whether the robots.txt has already been downloaded, if not download it
+    if _, err := os.Stat(u.Host); os.IsNotExist(err) {
+        downloadAndCreateRobots(u, constructURL)
+    }
 
-	// fetch the info regarding robot.txt ie modified time
-	// check whether the robots.txt needs a refresh depending on if the time since last download is greater than 1 hour
-	info, err := os.Stat(u.Host)
-	currentTime := time.Now()
-	robotsModified := info.ModTime()
-	elapsed := currentTime.Sub(robotsModified).Hours()
+    // fetch the info regarding robot.txt ie modified time
+    // check whether the robots.txt needs a refresh depending on if the time since last download is greater than 1 hour
+    info, err := os.Stat(u.Host)
+    currentTime := time.Now()
+    robotsModified := info.ModTime()
+    elapsed := currentTime.Sub(robotsModified).Hours()
 
-	if elapsed > 1 {
-		needRefresh = true
-	}
+    if elapsed > 1 {
+        needRefresh = true
+    }
 
-	if needRefresh {
-		downloadAndCreateRobots(u, constructURL)
-	}
+    if needRefresh {
+        downloadAndCreateRobots(u, constructURL)
+    }
+}
+
+func timeTrack(start time.Time, name string) {
+    elapsed := time.Since(start)
+    log.Printf("%s took %s", name, elapsed)
 }
 
 func checkRobots(newURL string) bool {
-	// This function checks for politeness regarding user agents, allow/deny and crawler rate
-	var allowedScan = true
-	var userAgent = false
-	var delay = time.Duration(1)
+    // This function checks for politeness regarding user agents, allow/deny and crawler rate
+    defer timeTrack(time.Now(), "Robots checking")
+    var allowedScan = true
+    var userAgent = false
+    var delay = time.Duration(1)
 
-	u, err := url.Parse(newURL)
-	if err != nil {
-		panic(err)
-	}
+    u, err := url.Parse(newURL)
+    if err != nil {
+        panic(err)
+    }
 
-	file, err := os.Open(u.Host)
-	if err != nil {
-		log.Panic(err)
-	}
-	defer file.Close()
+    file, err := os.Open(u.Host)
+    if err != nil {
+        log.Panic(err)
+    }
+    defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
+    scanner := bufio.NewScanner(file)
+    for scanner.Scan() {
 
-		if scanner.Text() == "Allow: "+u.Path {
-			allowedScan = true
-		}
+        if scanner.Text() == "Allow: "+u.Path {
+            allowedScan = true
+        }
 
-		if scanner.Text() == "Disallow: "+u.Path {
-			allowedScan = false
-		}
+        if scanner.Text() == "Disallow: "+u.Path {
+            allowedScan = false
+        }
 
-		if scanner.Text() == "User-agent: *" {
-			userAgent = true
-		}
+        if scanner.Text() == "User-agent: *" {
+            userAgent = true
+        }
 
-		if strings.HasPrefix(scanner.Text(), "Crawl-delay:") {
-			var stringDelay = strings.TrimPrefix(scanner.Text(), "Crawl-delay: ")
-			number, _ := strconv.Atoi(stringDelay)
-			delay = time.Duration(number)
-		}
+        if strings.HasPrefix(scanner.Text(), "Crawl-delay:") {
+            var stringDelay = strings.TrimPrefix(scanner.Text(), "Crawl-delay: ")
+            number, _ := strconv.Atoi(stringDelay)
+            delay = time.Duration(number)
+        }
 
-	}
+    }
 
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
+    if err := scanner.Err(); err != nil {
+        log.Fatal(err)
+    }
 
-	delaySecond(delay)
+    delaySecond(delay)
 
-	if allowedScan && userAgent {
-		return true
-	}
-	return false
+    if allowedScan && userAgent {
+        return true
+    }
+    return false
 
 }
 
 func downloadAndCreateRobots(u *url.URL, constructURL string) {
-	output, err := os.Create(u.Host)
-	if err != nil {
-		fmt.Println("Error while creating", u.Host, "-", err)
-	}
-	defer output.Close()
+    defer timeTrack(time.Now(), "Robots downloading and creating")
+    output, err := os.Create(u.Host)
+    if err != nil {
+        fmt.Println("Error while creating", u.Host, "-", err)
+    }
+    defer output.Close()
 
-	response, err := http.Get(constructURL)
+    response, err := http.Get(constructURL)
 
-	if err != nil {
-		panic(err)
-	}
+    if err != nil {
+        panic(err)
+    }
 
-	defer response.Body.Close()
+    defer response.Body.Close()
 
-	n, err := io.Copy(output, response.Body)
-	if err != nil {
-		fmt.Println("Error while downloading", u.Host, "-", err)
-	}
+    n, err := io.Copy(output, response.Body)
+    if err != nil {
+        fmt.Println("Error while downloading", u.Host, "-", err)
+    }
 
-	_ = n
+    _ = n
 }
 
-func downloadAndCreateJSONMap(newURL string, jsonData []byte) string {
-	u, err := url.Parse(newURL)
-	if err != nil {
-		panic(err)
-	}
+func addToJSONMap(newURL string, jsonData []byte) string {
+    u, err := url.Parse(newURL)
+    if err != nil {
+        panic(err)
+    }
 
-	var fileName = u.Host + ".json"
+    var fileName = u.Host + ".json"
 
-	err = ioutil.WriteFile(fileName, jsonData, 0644)
-	if err != nil {
-		panic(err)
-	} else {
-		return fileName
-	}
+    err = ioutil.WriteFile(fileName, jsonData, 0644)
+    if err != nil {
+        panic(err)
+    } else {
+        return fileName
+    }
 
 }
 
 func removeDuplicates(elements []string) []string {
-	// takes inspiration from https://www.dotnetperls.com/duplicates-go but rather than int it removes duplicate strings
-	// Use map to record duplicates as we find them.
-	encountered := map[string]bool{}
-	result := []string{}
+    // takes inspiration from https://www.dotnetperls.com/duplicates-go but rather than int it removes duplicate strings
+    // Use map to record duplicates as we find them.
+    encountered := map[string]bool{}
+    result := []string{}
 
-	for k, v := range elements {
-		if encountered[elements[k]] == true || v == "" {
-			// Do not add duplicate.
-		} else {
-			// Record this element as an encountered element.
-			encountered[elements[k]] = true
-			// Append to result slice.
-			result = append(result, elements[k])
-		}
-	}
-	// Return the new slice.
-	return result
+    for k, v := range elements {
+        if encountered[elements[k]] == true || v == "" {
+            // Do not add duplicate.
+        } else {
+            // Record this element as an encountered element.
+            encountered[elements[k]] = true
+            // Append to result slice.
+            result = append(result, elements[k])
+        }
+    }
+    // Return the new slice.
+    return result
 }
 
 func normalise(newURL string) string {
 
-	var lowercaseURL = strings.ToLower(newURL)
+    var lowercaseURL = strings.ToLower(newURL)
 
-	if !strings.HasSuffix(lowercaseURL, "/") {
-		return newURL + "/"
-	}
-	return lowercaseURL
+    if !strings.HasSuffix(lowercaseURL, "/") {
+        return newURL + "/"
+    }
+    return lowercaseURL
 
 }
 
 func fetchURL(baseURL string, c chan Document) {
-	//normalise url
-	var Location = normalise(baseURL)
+    defer timeTrack(time.Now(), "Fetching URL")
+    //normalise url
+    var Location = normalise(baseURL)
 
-	doc, err := goquery.NewDocument(Location)
-	if err != nil {
-		var Urls []string
-		var Stylesheets []string
-		var Scripts []string
-		var Images []string
-		c <- Document{Location, Urls, Stylesheets, Scripts, Images}
-		return
-	}
+    doc, err := goquery.NewDocument(Location)
+    if err != nil {
+        var Urls []string
+        var Stylesheets []string
+        var Scripts []string
+        var Images []string
+        c <- Document{Location, Urls, Stylesheets, Scripts, Images}
+        return
+    }
 
-	// Find all the anchor tags and get the href attribute value
-	Urls := doc.Find("a[href]").Map(func(_ int, s *goquery.Selection) string {
-		val, _ := s.Attr("href")
+    // Find all the anchor tags and get the href attribute value
+    Urls := doc.Find("a[href]").Map(func(_ int, s *goquery.Selection) string {
+        val, _ := s.Attr("href")
 
-		// Parse the base url
-		baseParse, err := url.Parse(Location)
-		if err != nil {
-			panic(err)
-		}
+        // Parse the base url
+        baseParse, err := url.Parse(Location)
+        if err != nil {
+            panic(err)
+        }
 
-		// Parse the context url
-		contextParse, err := url.Parse(val)
-		if err != nil {
-			panic(err)
-		}
-		// remove encoded query values of context
-		contextParse.RawQuery = ""
-		// remove fragments of context
-		contextParse.Fragment = ""
-		// only return link if host of the base url and context url are the same
-		if baseParse.Host == contextParse.Host {
-			return contextParse.String()
-		}
-		return ""
+        // Parse the context url
+        contextParse, err := url.Parse(val)
+        if err != nil {
+            panic(err)
+        }
+        // remove encoded query values of context
+        contextParse.RawQuery = ""
+        // remove fragments of context
+        contextParse.Fragment = ""
+        // only return link if host of the base url and context url are the same
+        if baseParse.Host == contextParse.Host {
+            return contextParse.String()
+        }
+        return ""
 
-	})
+    })
 
-	// Find all the img tags and get the src attribute value
-	Images := doc.Find("img[src]").Map(func(_ int, s *goquery.Selection) string {
-		val, _ := s.Attr("src")
+    // Find all the img tags and get the src attribute value
+    Images := doc.Find("img[src]").Map(func(_ int, s *goquery.Selection) string {
+        val, _ := s.Attr("src")
 
-		if strings.HasPrefix(val, "//") {
-			return strings.Replace(val, "//", "http://", -1)
-		}
-		return val
+        if strings.HasPrefix(val, "//") {
+            return strings.Replace(val, "//", "http://", -1)
+        }
+        return val
 
-	})
+    })
 
-	// Find all the script tags and get the src attribute value and remove // if present and replace with http
-	Scripts := doc.Find("script[src]").Map(func(_ int, s *goquery.Selection) string {
-		val, _ := s.Attr("src")
-		if strings.HasPrefix(val, "//") {
-			return strings.Replace(val, "//", "http://", -1)
-		}
+    // Find all the script tags and get the src attribute value and remove // if present and replace with http
+    Scripts := doc.Find("script[src]").Map(func(_ int, s *goquery.Selection) string {
+        val, _ := s.Attr("src")
+        if strings.HasPrefix(val, "//") {
+            return strings.Replace(val, "//", "http://", -1)
+        }
 
-		return val
-	})
+        return val
+    })
 
-	// Find all the link tags and get the href attribute value but only if the rel equals stylesheet
-	Stylesheets := doc.Find("link[rel=stylesheet]").Map(func(_ int, s *goquery.Selection) string {
-		val, _ := s.Attr("href")
-		return val
-	})
+    // Find all the link tags and get the href attribute value but only if the rel equals stylesheet
+    Stylesheets := doc.Find("link[rel=stylesheet]").Map(func(_ int, s *goquery.Selection) string {
+        val, _ := s.Attr("href")
+        return val
+    })
 
-	Urls = removeDuplicates(Urls)
-	Images = removeDuplicates(Images)
-	Stylesheets = removeDuplicates(Stylesheets)
-	Scripts = removeDuplicates(Scripts)
+    Urls = removeDuplicates(Urls)
+    Images = removeDuplicates(Images)
+    Stylesheets = removeDuplicates(Stylesheets)
+    Scripts = removeDuplicates(Scripts)
 
-	newDocument := Document{Location, Urls, Stylesheets, Scripts, Images}
+    newDocument := Document{Location, Urls, Stylesheets, Scripts, Images}
 
-	c <- newDocument
+    c <- newDocument
 
 }
 
 func remove(slice []string, s int) []string {
-	return append(slice[:s], slice[s+1:]...)
+    return append(slice[:s], slice[s+1:]...)
 }
 
 func processCrawler(documentMap map[string]Document, channelDocument chan Document, queue []string, markedPages map[string]bool) map[string]Document {
-	if len(queue) == 0 {
-		return documentMap
-	}
+    if len(queue) == 0 {
+        return documentMap
+    }
 
-	for k, v := range queue {
-		_ = k
-		var allowed = checkRobots(v)
+    for k, v := range queue {
+        _ = k
+        var allowed = checkRobots(v)
 
-		if allowed {
-			go fetchURL(v, channelDocument)
+        if allowed {
+            go fetchURL(v, channelDocument)
 
-			var details = <-channelDocument
-			documentMap[details.Location] = details
+            var details = <-channelDocument
+            documentMap[details.Location] = details
 
-			for k, v := range details.Urls {
-				_ = k
-				//ensure value isn't empty
-				if !markedPages[v] && v != "" {
-					markedPages[v] = true
-					queue = append(queue, v)
-				} else {
+            for k, v := range details.Urls {
+                _ = k
+                //ensure value isn't empty
+                if !markedPages[v] && v != "" {
+                    markedPages[v] = true
+                    queue = append(queue, v)
+                } else {
 
-				}
-			}
+                }
+            }
 
-			queue = remove(queue, 0)
+            queue = remove(queue, 0)
 
-			log.Println("Queue length:", len(queue))
-			log.Println("Documents length:", len(documentMap))
+            log.Println("Queue length:", len(queue))
+            log.Println("Documents length:", len(documentMap))
 
-			return processCrawler(documentMap, channelDocument, queue, markedPages)
-		}
-		fmt.Print("Not allowed")
-	}
-	return documentMap
+            return processCrawler(documentMap, channelDocument, queue, markedPages)
+        }
+        fmt.Print("Not allowed")
+    }
+    return documentMap
 }
 
 func main() {
-	var passedURL  = os.Getenv("WEBSITE")
+    var passedURL = os.Getenv("WEBSITE")
 
-	u, err := url.ParseRequestURI(passedURL)
-	if err != nil {
-		panic(err)
-	}
+    u, err := url.ParseRequestURI(passedURL)
+    if err != nil {
+        panic(err)
+    }
 
-	_ = u
+    _ = u
 
-	channelDocument := make(chan Document) // channel for document
-	var newURL = normalise(passedURL)
-	downloadRobots(newURL)
-	var markedPages = make(map[string]bool)     // URLs already in the system whether processed or in queue.
-	var queue []string                          // URLs to be fetched, using a very simple array FIFO
-	var documentMap = make(map[string]Document) // map of all the processed pages
-	markedPages[newURL] = true
-	queue = append(queue, newURL)
-	var results = processCrawler(documentMap, channelDocument, queue, markedPages)
-	b, err := json.MarshalIndent(results, "", "  ")
-	var fileName = downloadAndCreateJSONMap(newURL, b)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	fmt.Println("Sitemap: ", fileName)
+    channelDocument := make(chan Document) // channel for document
+    var newURL = normalise(passedURL)
+    downloadRobots(newURL)
+    var markedPages = make(map[string]bool)     // URLs already in the system whether processed or in queue.
+    var queue []string                          // URLs to be fetched, using a very simple array FIFO
+    var documentMap = make(map[string]Document) // map of all the processed pages
+    markedPages[newURL] = true
+    queue = append(queue, newURL)
+    var results = processCrawler(documentMap, channelDocument, queue, markedPages)
+    b, err := json.MarshalIndent(results, "", "  ")
+    var fileName = addToJSONMap(newURL, b)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+    fmt.Println("Sitemap: ", fileName)
 
 }
