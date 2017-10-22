@@ -247,7 +247,7 @@ func fetchURL(baseURL string, c chan Document) {
 		// Parse the context url
 		contextParse, err := url.Parse(val)
 		if err != nil {
-			panic(err)
+			return ""
 		}
 		// remove encoded query values of context
 		contextParse.RawQuery = ""
